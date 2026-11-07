@@ -302,7 +302,7 @@ extern "C" {
     __attribute__((visibility("default")))
     audio_effect_library_t AELI = {
         AUDIO_EFFECT_LIBRARY_TAG,
-        0x0100, // Version 1.0
+        EFFECT_LIBRARY_API_VERSION, // 0x00030000 (Major version 3, required by EffectsFactory)
         "ViPER4Android 32-bit Float SIMD Bridge",
         "ViPER520 & devddd963",
         bridge_lib_create_effect,
@@ -314,7 +314,7 @@ extern "C" {
     __attribute__((visibility("default")))
     audio_effect_library_t AudioEffectLibraryInfo = {
         AUDIO_EFFECT_LIBRARY_TAG,
-        0x0100,
+        EFFECT_LIBRARY_API_VERSION, // 0x00030000 (Major version 3, required by EffectsFactory)
         "ViPER4Android 32-bit Float SIMD Bridge",
         "ViPER520 & devddd963",
         bridge_lib_create_effect,

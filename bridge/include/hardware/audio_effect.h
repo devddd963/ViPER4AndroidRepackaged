@@ -123,6 +123,9 @@ struct effect_interface_s {
 
 #define AUDIO_EFFECT_LIBRARY_TAG ((('A') << 24) | (('E') << 16) | (('L') << 8) | ('T'))
 
+#define EFFECT_MAKE_API_VERSION(M, m) (((M) << 16) | ((m) & 0xFFFF))
+#define EFFECT_LIBRARY_API_VERSION EFFECT_MAKE_API_VERSION(3, 0) // 0x00030000 (Major version 3)
+
 typedef struct audio_effect_library_s {
     uint32_t tag;
     uint32_t version;
