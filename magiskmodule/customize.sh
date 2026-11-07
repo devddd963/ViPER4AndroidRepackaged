@@ -4,7 +4,7 @@
 source "$MODPATH"/constants.sh
 
 [ "$API" -lt "$MINAPI" ] && abort "Android SDK $API is not supported!"
-[ "$BOOTMODE" != true ] && abort "Please install this module within the Magisk app."
+[ "$BOOTMODE" != true ] && [ "$KSU" != true ] && abort "Please install this module within the Magisk or KernelSU app."
 
 IFS=$'\n'
 SEARCH_ROOT=/
@@ -18,6 +18,37 @@ denylist_run() {
   [ -z "$KSU" ] && [ "$MAGISK_VER_CODE" -ge 27000 ] && magisk --denylist exec "$@" && return
   "$@"
 }
+
+ui_print "- Installing ViPER4Android driver binaries"
+TARGET_ARCH="$ARCH"
+[ -z "$TARGET_ARCH" ] && TARGET_ARCH="$(getprop ro.product.cpu.abi)"
+case "$TARGET_ARCH" in
+  *x86*|*x64*|*amd64*)
+    ui_print "    Target architecture: x86 / x86_64 (Emulator)"
+    DRIVER_SRC="$MODPATH/drivers/x86"
+    ;;
+  *)
+    ui_print "    Target architecture: ARM / ARM64 (Device)"
+    DRIVER_SRC="$MODPATH/drivers/arm"
+    ;;
+esac
+
+mkdir -p "$MODPATH/system/vendor/lib/soundfx"
+mkdir -p "$MODPATH/vendor/lib/soundfx"
+
+if [ -f "$DRIVER_SRC/libv4a_fx.so" ]; then
+  cp -f "$DRIVER_SRC/libv4a_fx.so" "$MODPATH/system/vendor/lib/soundfx/libv4a_fx.so"
+  cp -f "$DRIVER_SRC/libv4a_fx.so" "$MODPATH/vendor/lib/soundfx/libv4a_fx.so"
+fi
+
+if [ -f "$DRIVER_SRC/libstdc++.so" ]; then
+  cp -f "$DRIVER_SRC/libstdc++.so" "$MODPATH/system/vendor/lib/libstdc++.so"
+  cp -f "$DRIVER_SRC/libstdc++.so" "$MODPATH/vendor/lib/libstdc++.so"
+elif [ -f "/system/lib/libstdc++.so" ] && [ ! -f "/vendor/lib/libstdc++.so" ]; then
+  cp -f "/system/lib/libstdc++.so" "$MODPATH/system/vendor/lib/libstdc++.so" 2>/dev/null
+  cp -f "/system/lib/libstdc++.so" "$MODPATH/vendor/lib/libstdc++.so" 2>/dev/null
+fi
+rm -rf "$MODPATH/drivers"
 
 # Create the scoped storage directory
 mkdir -p "$FOLDER"
@@ -155,23 +186,38 @@ for ORIGINAL_FILE in $AUDIO_EFFECTS_FILES; do
       ;;
   esac
   osp_detect "$FILE"
+  # Sync between $MODPATH/system/vendor and $MODPATH/vendor for Magisk / KernelSU OverlayFS compatibility
+  case "$FILE" in
+    "$MODPATH"/system/vendor/*)
+      ALT_FILE="$MODPATH/vendor/${FILE#$MODPATH/system/vendor/}"
+      mkdir -p "$(dirname "$ALT_FILE")"
+      cp -f "$FILE" "$ALT_FILE"
+      ;;
+    "$MODPATH"/vendor/*)
+      ALT_FILE="$MODPATH/system/vendor/${FILE#$MODPATH/vendor/}"
+      mkdir -p "$(dirname "$ALT_FILE")"
+      cp -f "$FILE" "$ALT_FILE"
+      ;;
+  esac
 done
 [ -z "$AUDIO_EFFECTS_FILES" ] && abort "Cant find any system audio configs!"
 
-ui_print "- Installing the ViPER4AndroidFX user app"
-APK="$MODPATH"/v4afx.apk
-[ ! -f "$APK" ] && abort "Missing ViPER4Android APK!"
-pm list packages | grep -q "^package:$VIPERFXPACKAGE$" && APK_UPGRADE=true || APK_UPGRADE=false
-APK_SIZE=$(stat -c %s "$APK")
-installAPK() {
-  pm install --install-location 1 --pkg "$VIPERFXPACKAGE" -S "$APK_SIZE" < "$APK" >&2
-}
-installAPK || {
-  $APK_UPGRADE && pm uninstall -k "$VIPERFXPACKAGE" >&2
-  APK_UPGRADE=false
-  installAPK
-} || abort "Failed to install V4AFX!"
-! $APK_UPGRADE && pm disable "$VIPERFXPACKAGE" >&2
+ui_print "- Installing ViPER4AndroidFX user app..."
+TEMP_APK="$TMPDIR/v4afx.apk"
+if [ -f "$MODPATH/v4afx.apk" ]; then
+  cp -f "$MODPATH/v4afx.apk" "$TEMP_APK"
+  rm -f "$MODPATH/v4afx.apk"
+else
+  unzip -oj "$ZIPFILE" "v4afx.apk" -d "$TMPDIR" >&2
+fi
+
+if [ -f "$TEMP_APK" ]; then
+  pm install -r -d "$TEMP_APK" >/dev/null 2>&1 || pm install -r "$TEMP_APK" >/dev/null 2>&1 || pm install "$TEMP_APK" >/dev/null 2>&1
+  rm -f "$TEMP_APK"
+  ui_print "    Application installed successfully (User App)."
+else
+  abort "! ERROR: v4afx.apk could not be found or extracted."
+fi
 
 ui_print "- Configuring ViPER4Android"
 VIPERFXPREFS="$(pm dump "$VIPERFXPACKAGE" | grep dataDir | head -n 1 | cut -d'=' -f2)"
@@ -224,3 +270,7 @@ ui_print "- Setting Permissions"
 set_perm_recursive "$MODPATH"/system root root 755 644
 set_perm_recursive "$MODPATH"/system/vendor root root 755 644 u:object_r:vendor_file:s0
 [ -d "$MODPATH"/system/vendor/etc ] && set_perm_recursive "$MODPATH"/system/vendor/etc root root 755 644 u:object_r:vendor_configs_file:s0
+if [ -d "$MODPATH"/vendor ]; then
+  set_perm_recursive "$MODPATH"/vendor root root 755 644 u:object_r:vendor_file:s0
+  [ -d "$MODPATH"/vendor/etc ] && set_perm_recursive "$MODPATH"/vendor/etc root root 755 644 u:object_r:vendor_configs_file:s0
+fi

@@ -10,14 +10,11 @@ waitUntilBootCompleted() {
   done
 }
 
-(
-  waitUntilBootCompleted
-  sleep 10
-  pm list packages -d | grep -q "$VIPERFXPACKAGE" && pm enable "$VIPERFXPACKAGE"
-) &
+# pm enable loop removed: app is never disabled during installation
 
 (
   waitUntilBootCompleted
+  pm grant "$VIPERFXPACKAGE" android.permission.DUMP >/dev/null 2>&1
   sleep 60
   while true; do
     PID=$(pidof "$VIPERFXPACKAGE")
