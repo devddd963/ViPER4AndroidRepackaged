@@ -49,8 +49,35 @@ typedef struct effect_descriptor_s {
     char          implementor[64];
 } effect_descriptor_t;
 
-#define EFFECT_FLAG_TYPE_INSERT     0x00000000
-#define EFFECT_FLAG_INSERT_FIRST    0x00000100
+#define EFFECT_FLAG_TYPE_SHIFT          0
+#define EFFECT_FLAG_TYPE_SIZE           3
+#define EFFECT_FLAG_TYPE_MASK           (((1 << EFFECT_FLAG_TYPE_SIZE) -1) << EFFECT_FLAG_TYPE_SHIFT)
+#define EFFECT_FLAG_TYPE_INSERT         (0 << EFFECT_FLAG_TYPE_SHIFT)
+#define EFFECT_FLAG_TYPE_AUXILIARY      (1 << EFFECT_FLAG_TYPE_SHIFT)
+#define EFFECT_FLAG_TYPE_REPLACE        (2 << EFFECT_FLAG_TYPE_SHIFT)
+#define EFFECT_FLAG_TYPE_PRE_PROC       (3 << EFFECT_FLAG_TYPE_SHIFT)
+#define EFFECT_FLAG_TYPE_POST_PROC      (4 << EFFECT_FLAG_TYPE_SHIFT)
+
+#define EFFECT_FLAG_INSERT_SHIFT        (EFFECT_FLAG_TYPE_SHIFT + EFFECT_FLAG_TYPE_SIZE)
+#define EFFECT_FLAG_INSERT_SIZE         3
+#define EFFECT_FLAG_INSERT_MASK         (((1 << EFFECT_FLAG_INSERT_SIZE) -1) << EFFECT_FLAG_INSERT_SHIFT)
+#define EFFECT_FLAG_INSERT_ANY          (0 << EFFECT_FLAG_INSERT_SHIFT)
+#define EFFECT_FLAG_INSERT_FIRST        (1 << EFFECT_FLAG_INSERT_SHIFT)
+#define EFFECT_FLAG_INSERT_LAST         (2 << EFFECT_FLAG_INSERT_SHIFT)
+#define EFFECT_FLAG_INSERT_EXCLUSIVE    (3 << EFFECT_FLAG_INSERT_SHIFT)
+
+#define EFFECT_FLAG_INPUT_SHIFT         (12)
+#define EFFECT_FLAG_INPUT_DIRECT        (1 << EFFECT_FLAG_INPUT_SHIFT)
+
+#define EFFECT_FLAG_OUTPUT_SHIFT        (14)
+#define EFFECT_FLAG_OUTPUT_DIRECT       (1 << EFFECT_FLAG_OUTPUT_SHIFT)
+
+typedef struct effect_param_s {
+    int32_t     status;     // Transaction status
+    uint32_t    psize;      // Parameter size
+    uint32_t    vsize;      // Value size
+    char        data[];     // Start of Parameter + Value data
+} effect_param_t;
 
 typedef struct audio_buffer_s {
     size_t frameCount;
