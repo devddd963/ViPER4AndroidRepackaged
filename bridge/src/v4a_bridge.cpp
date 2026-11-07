@@ -1,6 +1,7 @@
 #include <dlfcn.h>
 #include <stdlib.h>
 #include <string.h>
+#include <chrono>
 #include <android/log.h>
 #include <hardware/audio_effect.h>
 #include "v4a_defs.h"
@@ -12,9 +13,15 @@
 
 #define SCRATCH_SAMPLE_CAPACITY (16384) // 8192 stereo frames = 32 KB
 
+static inline uint64_t get_time_ms() {
+    return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 typedef struct {
     const struct effect_interface_s* itfe; // MUST BE FIRST FIELD
     effect_handle_t real_handle;
+    int32_t session_id;
     bool is_float_mode;
     uint8_t access_mode;
     uint32_t sample_rate;
@@ -22,6 +29,7 @@ typedef struct {
     int16_t* s16_scratch;
     bool is_active;
     bool is_processing;
+    uint64_t last_process_time_ms;
 } v4a_bridge_context_t;
 
 // Real library handles and function pointers
@@ -101,28 +109,29 @@ static int32_t bridge_process(effect_handle_t self, audio_buffer_t *inBuffer, au
     }
 
     ctx->is_processing = true;
+    ctx->last_process_time_ms = get_time_ms();
 
-    // Passthrough mode if stream is already 16-bit PCM
+    // 1. Direct Passthrough mode if stream is 16-bit PCM (e.g. Session 0 Global Output)
     if (!ctx->is_float_mode) {
         return (*ctx->real_handle)->process(ctx->real_handle, inBuffer, outBuffer);
     }
 
-    // 32-bit Float mode: Blazing fast SIMD conversion
+    // 2. 32-bit Float mode: Dynamic SIMD conversion (e.g. Modern Per-App Track Session)
     size_t total_samples = inBuffer->frameCount * ctx->channels;
     if (total_samples > SCRATCH_SAMPLE_CAPACITY) {
         total_samples = SCRATCH_SAMPLE_CAPACITY;
     }
 
-    // 1. Float32 -> Int16 SIMD down-conversion with saturation clamping
+    // Float32 -> Int16 SIMD down-conversion with saturation clamping
     float_to_s16_neon(inBuffer->f32, ctx->s16_scratch, total_samples);
 
-    // 2. Invoke real ViPER processing in 16-bit
+    // Invoke real ViPER processing in 16-bit
     audio_buffer_t temp_buf;
     temp_buf.frameCount = inBuffer->frameCount;
     temp_buf.s16 = ctx->s16_scratch;
     int32_t ret = (*ctx->real_handle)->process(ctx->real_handle, &temp_buf, &temp_buf);
 
-    // 3. Int16 -> Float32 SIMD up-conversion
+    // Int16 -> Float32 SIMD up-conversion
     bool accumulate = (ctx->access_mode == EFFECT_BUFFER_ACCESS_ACCUMULATE);
     s16_to_float_neon(ctx->s16_scratch, outBuffer->f32, total_samples, accumulate);
 
@@ -138,29 +147,54 @@ static int32_t bridge_command(effect_handle_t self, uint32_t cmdCode, uint32_t c
     if (ctx == nullptr) return -1;
 
     switch (cmdCode) {
+        case EFFECT_CMD_INIT: {
+            if (pReplyData && replySize && *replySize >= sizeof(int32_t)) {
+                *(int32_t*)pReplyData = 0;
+            }
+            if (ctx->real_handle) {
+                (*ctx->real_handle)->command(ctx->real_handle, cmdCode, cmdSize, pCmdData, replySize, pReplyData);
+                if (pReplyData && replySize && *replySize >= sizeof(int32_t)) {
+                    *(int32_t*)pReplyData = 0;
+                }
+            }
+            return 0;
+        }
+
         case EFFECT_CMD_SET_CONFIG: {
             if (pCmdData == nullptr || cmdSize < sizeof(effect_config_t)) return -1;
             effect_config_t* cfg = (effect_config_t*)pCmdData;
 
             ctx->is_float_mode = (cfg->inputCfg.format == AUDIO_FORMAT_PCM_FLOAT);
             ctx->access_mode = cfg->outputCfg.accessMode;
-            ctx->sample_rate = cfg->inputCfg.samplingRate;
+            ctx->sample_rate = cfg->inputCfg.samplingRate ? cfg->inputCfg.samplingRate : 48000;
             ctx->channels = (cfg->inputCfg.channels == AUDIO_CHANNEL_OUT_MONO) ? 1 : 2;
 
-            LOGI("EFFECT_CMD_SET_CONFIG: rate=%u, channels=%u, is_float=%d",
-                 ctx->sample_rate, ctx->channels, ctx->is_float_mode);
+            LOGI("EFFECT_CMD_SET_CONFIG: session=%d, rate=%u, channels=%u, is_float=%d",
+                 ctx->session_id, ctx->sample_rate, ctx->channels, ctx->is_float_mode);
 
-            // Translate config for real 16-bit driver
-            effect_config_t real_cfg = *cfg;
-            real_cfg.inputCfg.format = AUDIO_FORMAT_PCM_16_BIT;
-            real_cfg.outputCfg.format = AUDIO_FORMAT_PCM_16_BIT;
+            if (!ctx->is_float_mode) {
+                // Direct native 16-bit PCM pass through to real driver!
+                (*ctx->real_handle)->command(ctx->real_handle, cmdCode, cmdSize, pCmdData, replySize, pReplyData);
+                if (pReplyData && replySize && *replySize >= sizeof(int32_t)) {
+                    *(int32_t*)pReplyData = 0;
+                }
+                return 0; // Always report NO_ERROR to AudioFlinger
+            } else {
+                // Incoming is 32-bit Float (per-app track session)
+                // Configure real driver using internal 16-bit buffers
+                effect_config_t real_cfg = *cfg;
+                real_cfg.inputCfg.format = AUDIO_FORMAT_PCM_16_BIT;
+                real_cfg.outputCfg.format = AUDIO_FORMAT_PCM_16_BIT;
+                real_cfg.inputCfg.buffer.s16 = ctx->s16_scratch;
+                real_cfg.outputCfg.buffer.s16 = ctx->s16_scratch;
 
-            int32_t ret = (*ctx->real_handle)->command(ctx->real_handle, cmdCode, sizeof(effect_config_t),
-                                                       &real_cfg, replySize, pReplyData);
-            if (pReplyData && replySize && *replySize >= sizeof(int32_t)) {
-                *(int32_t*)pReplyData = 0; // Report success to AudioFlinger
+                (*ctx->real_handle)->command(ctx->real_handle, cmdCode, sizeof(effect_config_t),
+                                            &real_cfg, replySize, pReplyData);
+                if (pReplyData && replySize && *replySize >= sizeof(int32_t)) {
+                    *(int32_t*)pReplyData = 0;
+                }
+                return 0; // Always report NO_ERROR to AudioFlinger
             }
-            return ret;
         }
 
         case EFFECT_CMD_GET_CONFIG: {
@@ -178,21 +212,119 @@ static int32_t bridge_command(effect_handle_t self, uint32_t cmdCode, uint32_t c
 
         case EFFECT_CMD_ENABLE: {
             ctx->is_active = true;
-            return (*ctx->real_handle)->command(ctx->real_handle, cmdCode, cmdSize, pCmdData, replySize, pReplyData);
+            int32_t ret = (*ctx->real_handle)->command(ctx->real_handle, cmdCode, cmdSize, pCmdData, replySize, pReplyData);
+            if (pReplyData && replySize && *replySize >= sizeof(int32_t)) {
+                *(int32_t*)pReplyData = 0;
+            }
+            return 0;
         }
 
         case EFFECT_CMD_DISABLE: {
             ctx->is_active = false;
             ctx->is_processing = false;
-            return (*ctx->real_handle)->command(ctx->real_handle, cmdCode, cmdSize, pCmdData, replySize, pReplyData);
+            int32_t ret = (*ctx->real_handle)->command(ctx->real_handle, cmdCode, cmdSize, pCmdData, replySize, pReplyData);
+            if (pReplyData && replySize && *replySize >= sizeof(int32_t)) {
+                *(int32_t*)pReplyData = 0;
+            }
+            return 0;
         }
 
         case EFFECT_CMD_RESET: {
             ctx->is_processing = false;
-            return (*ctx->real_handle)->command(ctx->real_handle, cmdCode, cmdSize, pCmdData, replySize, pReplyData);
+            int32_t ret = (*ctx->real_handle)->command(ctx->real_handle, cmdCode, cmdSize, pCmdData, replySize, pReplyData);
+            if (pReplyData && replySize && *replySize >= sizeof(int32_t)) {
+                *(int32_t*)pReplyData = 0;
+            }
+            return 0;
         }
 
         case EFFECT_CMD_GET_PARAM: {
+            if (pCmdData == nullptr || cmdSize < sizeof(effect_param_t) || pReplyData == nullptr || replySize == nullptr) {
+                return -EINVAL;
+            }
+
+            effect_param_t *pCmdParam = (effect_param_t *)pCmdData;
+            effect_param_t *pReplyParam = (effect_param_t *)pReplyData;
+
+            // Offset of parameter value in data[]: rounded up to 32-bit alignment
+            uint32_t vOffset = ((pCmdParam->psize + sizeof(int32_t) - 1) / sizeof(int32_t)) * sizeof(int32_t);
+
+            if (pCmdParam->psize >= sizeof(uint32_t)) {
+                uint32_t paramCode = *(uint32_t *)pCmdParam->data;
+                memcpy(pReplyParam, pCmdParam, sizeof(effect_param_t) + pCmdParam->psize);
+
+                switch (paramCode) {
+                    case V4A_PARAM_GET_ENABLED: { // 1
+                        pReplyParam->status = 0;
+                        pReplyParam->vsize = sizeof(int32_t);
+                        *(int32_t *)(pReplyParam->data + vOffset) = ctx->is_active ? 1 : 0;
+                        *replySize = sizeof(effect_param_t) + vOffset + pReplyParam->vsize;
+                        return 0;
+                    }
+                    case V4A_PARAM_GET_CONFIGURE: { // 2: Status Normal (1) / Abnormal (0)
+                        pReplyParam->status = 0;
+                        pReplyParam->vsize = sizeof(int32_t);
+                        *(int32_t *)(pReplyParam->data + vOffset) = 1; // Always Normal when initialized
+                        *replySize = sizeof(effect_param_t) + vOffset + pReplyParam->vsize;
+                        return 0;
+                    }
+                    case V4A_PARAM_GET_STREAMING: { // 3: Is Processing
+                        bool is_proc = ctx->is_active && ((get_time_ms() - ctx->last_process_time_ms) < 5000);
+                        pReplyParam->status = 0;
+                        pReplyParam->vsize = sizeof(int32_t);
+                        *(int32_t *)(pReplyParam->data + vOffset) = is_proc ? 1 : 0;
+                        *replySize = sizeof(effect_param_t) + vOffset + pReplyParam->vsize;
+                        return 0;
+                    }
+                    case V4A_PARAM_GET_SAMPLING_RATE: { // 4
+                        pReplyParam->status = 0;
+                        pReplyParam->vsize = sizeof(uint32_t);
+                        *(uint32_t *)(pReplyParam->data + vOffset) = ctx->sample_rate ? ctx->sample_rate : 48000;
+                        *replySize = sizeof(effect_param_t) + vOffset + pReplyParam->vsize;
+                        return 0;
+                    }
+                    case V4A_PARAM_GET_DRIVER_VERSION_CODE: { // 6
+                        pReplyParam->status = 0;
+                        pReplyParam->vsize = sizeof(uint32_t);
+                        *(uint32_t *)(pReplyParam->data + vOffset) = 2504;
+                        *replySize = sizeof(effect_param_t) + vOffset + pReplyParam->vsize;
+                        return 0;
+                    }
+                    case V4A_PARAM_GET_DRIVER_VERSION_NAME: { // 7
+                        const char* ver = "2.5.0.4";
+                        pReplyParam->status = 0;
+                        pReplyParam->vsize = strlen(ver);
+                        memcpy(pReplyParam->data + vOffset, ver, pReplyParam->vsize);
+                        *replySize = sizeof(effect_param_t) + vOffset + pReplyParam->vsize;
+                        return 0;
+                    }
+                    case V4A_PARAM_GET_DISABLE_REASON: { // 8
+                        pReplyParam->status = 0;
+                        pReplyParam->vsize = sizeof(int32_t);
+                        *(int32_t *)(pReplyParam->data + vOffset) = 0; // NONE
+                        *replySize = sizeof(effect_param_t) + vOffset + pReplyParam->vsize;
+                        return 0;
+                    }
+                    case V4A_PARAM_GET_DISABLE_REASON_MESSAGE: { // 9
+                        pReplyParam->status = 0;
+                        pReplyParam->vsize = 0;
+                        *replySize = sizeof(effect_param_t) + vOffset;
+                        return 0;
+                    }
+                    case V4A_PARAM_GET_ARCHITECTURE: { // 11: NEON!
+                        const char* arch = "NEON";
+                        pReplyParam->status = 0;
+                        pReplyParam->vsize = strlen(arch);
+                        memcpy(pReplyParam->data + vOffset, arch, pReplyParam->vsize);
+                        *replySize = sizeof(effect_param_t) + vOffset + pReplyParam->vsize;
+                        return 0;
+                    }
+                    default:
+                        break;
+                }
+            }
+
+            // For all other parameter queries (Convolver, EQ curves, DDC, etc.), pass directly to real driver
             return (*ctx->real_handle)->command(ctx->real_handle, cmdCode, cmdSize, pCmdData, replySize, pReplyData);
         }
 
@@ -230,14 +362,16 @@ static int32_t bridge_lib_create_effect(const effect_uuid_t *uuid, int32_t sessi
     if (ctx == nullptr) return -1;
 
     ctx->itfe = &g_bridge_interface;
+    ctx->session_id = sessionId;
     ctx->channels = 2;
     ctx->sample_rate = 48000;
-    ctx->is_float_mode = true;
+    ctx->is_float_mode = false; // Default to 16-bit unless AudioFlinger specifies Float
     ctx->is_active = false;
     ctx->is_processing = false;
     ctx->access_mode = EFFECT_BUFFER_ACCESS_WRITE;
+    ctx->last_process_time_ms = 0;
 
-    // Allocate fixed scratch buffer (32 KB) - zero malloc during processing
+    // Allocate fixed scratch buffer (32 KB) for float translation
     ctx->s16_scratch = (int16_t*)malloc(SCRATCH_SAMPLE_CAPACITY * sizeof(int16_t));
     if (ctx->s16_scratch == nullptr) {
         free(ctx);
@@ -253,7 +387,7 @@ static int32_t bridge_lib_create_effect(const effect_uuid_t *uuid, int32_t sessi
     }
 
     *pHandle = (effect_handle_t)ctx;
-    LOGI("ViPER4Android 32-bit Float Bridge created successfully for session %d", sessionId);
+    LOGI("ViPER4Android Dynamic SIMD Bridge created successfully for session %d", sessionId);
     return 0;
 }
 
@@ -275,24 +409,17 @@ static int32_t bridge_lib_release_effect(effect_handle_t handle) {
 static int32_t bridge_lib_get_descriptor(const effect_uuid_t *uuid, effect_descriptor_t *pDescriptor) {
     if (pDescriptor == nullptr) return -1;
 
-    // If real library is already available, query it
-    if (load_real_library()) {
-        int32_t ret = g_real_lib->get_descriptor(uuid, pDescriptor);
-        if (ret == 0) return 0;
-    }
-
-    // Rock-solid Fallback Descriptor matching original ViPER driver byte-for-byte
-    // Guarantees AudioEffect.queryEffects() registers the driver even before first audio playback
+    // Fallback Descriptor matching modern ViPER/JamesDSP standards
     memset(pDescriptor, 0, sizeof(effect_descriptor_t));
     pDescriptor->uuid = V4A_FX_UUID;
     pDescriptor->apiVersion = 0x00020000;
-    pDescriptor->flags = 0x0000f010; // EFFECT_FLAG_TYPE_INSERT | EFFECT_FLAG_INSERT_FIRST
+    pDescriptor->flags = EFFECT_FLAG_OUTPUT_DIRECT | EFFECT_FLAG_INPUT_DIRECT |
+                         EFFECT_FLAG_INSERT_LAST | EFFECT_FLAG_TYPE_INSERT;
     pDescriptor->cpuLoad = 8;
     pDescriptor->memoryUsage = 1;
     strncpy(pDescriptor->name, "ViPER4Android [2.5.0.4]", sizeof(pDescriptor->name) - 1);
     strncpy(pDescriptor->implementor, "ViPER.WYF", sizeof(pDescriptor->implementor) - 1);
 
-    LOGI("Returning ViPER4Android [2.5.0.4] descriptor for AudioEffect registry");
     return 0;
 }
 
@@ -303,7 +430,7 @@ extern "C" {
     audio_effect_library_t AELI = {
         AUDIO_EFFECT_LIBRARY_TAG,
         EFFECT_LIBRARY_API_VERSION, // 0x00030000 (Major version 3, required by EffectsFactory)
-        "ViPER4Android 32-bit Float SIMD Bridge",
+        "ViPER4Android Dynamic SIMD Bridge",
         "ViPER520 & devddd963",
         bridge_lib_create_effect,
         bridge_lib_release_effect,
@@ -315,7 +442,7 @@ extern "C" {
     audio_effect_library_t AudioEffectLibraryInfo = {
         AUDIO_EFFECT_LIBRARY_TAG,
         EFFECT_LIBRARY_API_VERSION, // 0x00030000 (Major version 3, required by EffectsFactory)
-        "ViPER4Android 32-bit Float SIMD Bridge",
+        "ViPER4Android Dynamic SIMD Bridge",
         "ViPER520 & devddd963",
         bridge_lib_create_effect,
         bridge_lib_release_effect,

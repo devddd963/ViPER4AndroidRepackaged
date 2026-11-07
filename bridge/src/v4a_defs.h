@@ -10,14 +10,19 @@ static const effect_uuid_t V4A_FX_UUID = {
 };
 
 // ViPER4Android Driver Status Query Codes (GET_PARAM)
+// As queried by com.wstxda.viper4android / com.pittvandewitt.viperfx StatusDialog
 enum {
-    V4A_PARAM_GET_DRIVER_VERSION = 0x8001, // e.g. "2.5.0.4"
-    V4A_PARAM_GET_ENABLED        = 0x8002, // 1 = Yes, 0 = No
-    V4A_PARAM_GET_NEON           = 0x8003, // 1 = Yes, 0 = No
-    V4A_PARAM_GET_SUPPORTED      = 0x8004, // 1 = Supported
-    V4A_PARAM_GET_STATUS         = 0x8005, // 1 = Normal, 0 = Abnormal
-    V4A_PARAM_GET_PROCESSING     = 0x8006, // 1 = Yes, 0 = No
-    V4A_PARAM_GET_SAMPLING_RATE  = 0x8007  // e.g. 48000
+    V4A_PARAM_GET_ENABLED                = 1,   // Enabled: 1 = Yes, 0 = No
+    V4A_PARAM_GET_CONFIGURE              = 2,   // Status: 1 = Normal, 0 = Abnormal
+    V4A_PARAM_GET_STREAMING              = 3,   // Processing: 1 = Yes, 0 = No
+    V4A_PARAM_GET_SAMPLING_RATE          = 4,   // e.g. 48000
+    V4A_PARAM_GET_CONVOLUTION_KERNEL_ID  = 5,
+    V4A_PARAM_GET_DRIVER_VERSION_CODE    = 6,   // e.g. 2504
+    V4A_PARAM_GET_DRIVER_VERSION_NAME    = 7,   // e.g. "2.5.0.4"
+    V4A_PARAM_GET_DISABLE_REASON         = 8,   // 0 = NONE
+    V4A_PARAM_GET_DISABLE_REASON_MESSAGE = 9,
+    V4A_PARAM_GET_CONFIG                 = 10,  // 40 bytes config
+    V4A_PARAM_GET_ARCHITECTURE           = 11   // "NEON"
 };
 
 // Paths to search for the original ViPER binary driver
