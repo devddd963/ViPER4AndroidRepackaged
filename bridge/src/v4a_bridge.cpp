@@ -180,13 +180,16 @@ static int32_t bridge_command(effect_handle_t self, uint32_t cmdCode, uint32_t c
                 }
                 return 0; // Always report NO_ERROR to AudioFlinger
             } else {
-                // Incoming is 32-bit Float (per-app track session)
+                // Incoming is 32-bit Float (per-app track session or float session 0)
                 // Configure real driver using internal 16-bit buffers
                 effect_config_t real_cfg = *cfg;
                 real_cfg.inputCfg.format = AUDIO_FORMAT_PCM_16_BIT;
                 real_cfg.outputCfg.format = AUDIO_FORMAT_PCM_16_BIT;
                 real_cfg.inputCfg.buffer.s16 = ctx->s16_scratch;
                 real_cfg.outputCfg.buffer.s16 = ctx->s16_scratch;
+                real_cfg.outputCfg.accessMode = EFFECT_BUFFER_ACCESS_WRITE;
+                real_cfg.inputCfg.mask = 0x001F;
+                real_cfg.outputCfg.mask = 0x001F;
 
                 (*ctx->real_handle)->command(ctx->real_handle, cmdCode, sizeof(effect_config_t),
                                             &real_cfg, replySize, pReplyData);

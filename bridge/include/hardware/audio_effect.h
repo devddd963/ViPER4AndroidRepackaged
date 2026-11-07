@@ -83,32 +83,35 @@ typedef struct audio_buffer_s {
     size_t frameCount;
     union {
         void*    raw;
+        float*   f32;
         int32_t* s32;
         int16_t* s16;
         uint8_t* u8;
-        float*   f32;
     };
 } audio_buffer_t;
 
-typedef struct effect_buffer_config_s {
-    union {
-        audio_buffer_t buffer;
-        void* raw;
-    };
-    uint32_t samplingRate;
-    uint32_t channels;
-    union {
-        void* bufferProvider;
-        void* reserved;
-    };
-    uint8_t format;
-    uint8_t accessMode;
-    uint16_t mask;
-} effect_buffer_config_t;
+typedef int32_t (*buffer_function_t)(void *cookie, audio_buffer_t *buffer);
+typedef struct buffer_provider_s {
+    buffer_function_t getBuffer;       // retrieve next buffer
+    buffer_function_t releaseBuffer;   // release used buffer
+    void             *cookie;          // for use by client of buffer provider functions
+} buffer_provider_t;
+
+typedef struct buffer_config_s {
+    audio_buffer_t    buffer;          // buffer for use by process() function
+    uint32_t          samplingRate;    // sampling rate
+    uint32_t          channels;        // channel mask
+    buffer_provider_t bufferProvider;  // buffer provider (3 pointers = 12 bytes on 32-bit, 24 on 64-bit)
+    uint8_t           format;          // Audio format (AUDIO_FORMAT_PCM_16_BIT = 1, AUDIO_FORMAT_PCM_FLOAT = 5)
+    uint8_t           accessMode;      // read/write or accumulate in buffer
+    uint16_t          mask;            // indicates which of the above fields is valid
+} buffer_config_t;
+
+typedef buffer_config_t effect_buffer_config_t;
 
 typedef struct effect_config_s {
-    effect_buffer_config_t inputCfg;
-    effect_buffer_config_t outputCfg;
+    buffer_config_t inputCfg;
+    buffer_config_t outputCfg;
 } effect_config_t;
 
 enum {
