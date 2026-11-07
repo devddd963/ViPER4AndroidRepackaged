@@ -25,7 +25,7 @@ jobs:
         echo "Found NDK at: $NDK_PATH"
         echo "path=$NDK_PATH" >> "$GITHUB_OUTPUT"
 
-    - name: Build 32-bit Float ARM NEON Bridge
+    - name: Build Universal 32-bit Float SIMD Bridge
       run: |
         NDK="${{ steps.ndk.outputs.path }}"
         TOOLCHAIN="$NDK/build/cmake/android.toolchain.cmake"
@@ -38,7 +38,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
         cmake --build build-arm64
 
-        echo "==> Compiling for armeabi-v7a..."
+        echo "==> Compiling for armeabi-v7a (ARM phone driver)..."
         cmake -B build-arm -S bridge \
           -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
           -DANDROID_ABI=armeabi-v7a \
@@ -46,27 +46,42 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release
         cmake --build build-arm
 
-    - name: Package Bridge into Module Drivers
+        echo "==> Compiling for x86 (Emulator driver with SSE2)..."
+        cmake -B build-x86 -S bridge \
+          -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
+          -DANDROID_ABI=x86 \
+          -DANDROID_PLATFORM=android-24 \
+          -DCMAKE_BUILD_TYPE=Release
+        cmake --build build-x86
+
+    - name: Package Bridges into Unified Module Drivers
       run: |
-        # Setup ARM driver: rename original stock binary driver to libv4a_fx_real.so
+        # 1. ARM Driver Setup: preserve original core and drop in ARM NEON bridge
         if [ -f magiskmodule/drivers/arm/libv4a_fx.so ] && [ ! -f magiskmodule/drivers/arm/libv4a_fx_real.so ]; then
           mv magiskmodule/drivers/arm/libv4a_fx.so magiskmodule/drivers/arm/libv4a_fx_real.so
         fi
-
-        # Place the compiled NEON bridge as the drop-in libv4a_fx.so
         cp -f build-arm/libv4a_bridge.so magiskmodule/drivers/arm/libv4a_fx.so
 
-        echo "==> Drivers prepared:"
-        ls -la magiskmodule/drivers/arm/
+        # 2. x86 Driver Setup: preserve original core and drop in x86 SSE2 bridge
+        if [ -f magiskmodule/drivers/x86/libv4a_fx.so ] && [ ! -f magiskmodule/drivers/x86/libv4a_fx_real.so ]; then
+          mv magiskmodule/drivers/x86/libv4a_fx.so magiskmodule/drivers/x86/libv4a_fx_real.so
+        fi
+        cp -f build-x86/libv4a_bridge.so magiskmodule/drivers/x86/libv4a_fx.so
 
-    - name: Compile Magisk Module
+        echo "==> Unified Drivers Prepared:"
+        echo "--- ARM Drivers ---"
+        ls -la magiskmodule/drivers/arm/
+        echo "--- x86 Drivers ---"
+        ls -la magiskmodule/drivers/x86/
+
+    - name: Compile Unified Magisk Module
       run: |
         chmod +x compile.sh
         ./compile.sh
 
-    - name: Upload Flashable Module Artifact
+    - name: Upload Flashable Unified Module
       uses: actions/upload-artifact@v4
       with:
-        name: ViPER4AndroidFX-Enhanced-Universal
+        name: ViPER4AndroidFX-Universal-Unified
         path: ViPER4AndroidFX-*.zip
         if-no-files-found: error
