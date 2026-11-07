@@ -35,10 +35,22 @@ esac
 
 mkdir -p "$MODPATH/system/vendor/lib/soundfx"
 mkdir -p "$MODPATH/vendor/lib/soundfx"
+mkdir -p "$MODPATH/system/vendor/lib64/soundfx"
+mkdir -p "$MODPATH/vendor/lib64/soundfx"
 
 if [ -f "$DRIVER_SRC/libv4a_fx.so" ]; then
   cp -f "$DRIVER_SRC/libv4a_fx.so" "$MODPATH/system/vendor/lib/soundfx/libv4a_fx.so"
   cp -f "$DRIVER_SRC/libv4a_fx.so" "$MODPATH/vendor/lib/soundfx/libv4a_fx.so"
+fi
+
+if [ -f "$DRIVER_SRC/libv4a_fx_real.so" ]; then
+  cp -f "$DRIVER_SRC/libv4a_fx_real.so" "$MODPATH/system/vendor/lib/soundfx/libv4a_fx_real.so"
+  cp -f "$DRIVER_SRC/libv4a_fx_real.so" "$MODPATH/vendor/lib/soundfx/libv4a_fx_real.so"
+fi
+
+if [ -f "$DRIVER_SRC/libv4a_fx_64.so" ]; then
+  cp -f "$DRIVER_SRC/libv4a_fx_64.so" "$MODPATH/system/vendor/lib64/soundfx/libv4a_fx.so"
+  cp -f "$DRIVER_SRC/libv4a_fx_64.so" "$MODPATH/vendor/lib64/soundfx/libv4a_fx.so"
 fi
 
 if [ -f "$DRIVER_SRC/libstdc++.so" ]; then

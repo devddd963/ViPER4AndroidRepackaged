@@ -7,17 +7,66 @@ jobs:
     name: Build Magisk Module
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
       with:
         fetch-depth: 0
-    - name: Prepare files
-      run: chmod +x compile.sh
-    - name: Compile
-      run: ./compile.sh
-    - name: Upload Result
-      uses: actions/upload-artifact@v3
+
+    - name: Locate Android NDK
+      id: ndk
+      run: |
+        if [ -n "$ANDROID_NDK_LATEST_HOME" ] && [ -d "$ANDROID_NDK_LATEST_HOME" ]; then
+          NDK_PATH="$ANDROID_NDK_LATEST_HOME"
+        elif [ -n "$ANDROID_NDK_HOME" ] && [ -d "$ANDROID_NDK_HOME" ]; then
+          NDK_PATH="$ANDROID_NDK_HOME"
+        else
+          NDK_PATH=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)
+        fi
+        echo "Found NDK at: $NDK_PATH"
+        echo "path=$NDK_PATH" >> "$GITHUB_OUTPUT"
+
+    - name: Build 32-bit Float ARM NEON Bridge
+      run: |
+        NDK="${{ steps.ndk.outputs.path }}"
+        TOOLCHAIN="$NDK/build/cmake/android.toolchain.cmake"
+
+        echo "==> Compiling for arm64-v8a..."
+        cmake -B build-arm64 -S bridge \
+          -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
+          -DANDROID_ABI=arm64-v8a \
+          -DANDROID_PLATFORM=android-24 \
+          -DCMAKE_BUILD_TYPE=Release
+        cmake --build build-arm64
+
+        echo "==> Compiling for armeabi-v7a..."
+        cmake -B build-arm -S bridge \
+          -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
+          -DANDROID_ABI=armeabi-v7a \
+          -DANDROID_PLATFORM=android-24 \
+          -DCMAKE_BUILD_TYPE=Release
+        cmake --build build-arm
+
+    - name: Package Bridge into Module Drivers
+      run: |
+        # Setup ARM driver: rename original stock binary driver to libv4a_fx_real.so
+        if [ -f magiskmodule/drivers/arm/libv4a_fx.so ] && [ ! -f magiskmodule/drivers/arm/libv4a_fx_real.so ]; then
+          mv magiskmodule/drivers/arm/libv4a_fx.so magiskmodule/drivers/arm/libv4a_fx_real.so
+        fi
+
+        # Place the compiled NEON bridge as the drop-in libv4a_fx.so
+        cp -f build-arm/libv4a_bridge.so magiskmodule/drivers/arm/libv4a_fx.so
+
+        echo "==> Drivers prepared:"
+        ls -la magiskmodule/drivers/arm/
+
+    - name: Compile Magisk Module
+      run: |
+        chmod +x compile.sh
+        ./compile.sh
+
+    - name: Upload Flashable Module Artifact
+      uses: actions/upload-artifact@v4
       with:
-        name: ViPER4AndroidRepackaged.zip
+        name: ViPER4AndroidFX-Enhanced-Universal
         path: ViPER4AndroidFX-*.zip
         if-no-files-found: error
