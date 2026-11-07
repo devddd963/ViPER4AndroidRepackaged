@@ -44,12 +44,39 @@ static bool load_real_library() {
         return false;
     }
 
-    g_real_lib = (audio_effect_library_t*)dlsym(g_real_lib_handle, "AudioEffectLibraryInfo");
+    // Try AELI first (standard symbol in ViPER4Android and AOSP HAL), then AudioEffectLibraryInfo
+    g_real_lib = (audio_effect_library_t*)dlsym(g_real_lib_handle, "AELI");
     if (g_real_lib == nullptr) {
-        LOGE("Failed to find AudioEffectLibraryInfo in real driver: %s", dlerror());
-        dlclose(g_real_lib_handle);
-        g_real_lib_handle = nullptr;
-        return false;
+        g_real_lib = (audio_effect_library_t*)dlsym(g_real_lib_handle, "AudioEffectLibraryInfo");
+    }
+
+    if (g_real_lib == nullptr) {
+        // Fall back to legacy entry points: EffectCreate, EffectRelease, EffectGetDescriptor
+        auto fn_create = (int32_t (*)(const effect_uuid_t *, int32_t, int32_t, effect_handle_t *))
+            dlsym(g_real_lib_handle, "EffectCreate");
+        auto fn_release = (int32_t (*)(effect_handle_t))
+            dlsym(g_real_lib_handle, "EffectRelease");
+        auto fn_desc = (int32_t (*)(const effect_uuid_t *, effect_descriptor_t *))
+            dlsym(g_real_lib_handle, "EffectGetDescriptor");
+
+        if (fn_create && fn_release && fn_desc) {
+            static audio_effect_library_t s_synth_lib = {
+                AUDIO_EFFECT_LIBRARY_TAG,
+                0x0100,
+                "ViPER4Android Real (Legacy)",
+                "ViPER520",
+                fn_create,
+                fn_release,
+                fn_desc
+            };
+            g_real_lib = &s_synth_lib;
+            LOGI("Loaded real ViPER driver via legacy symbols (EffectCreate / EffectRelease / EffectGetDescriptor)");
+        } else {
+            LOGE("Failed to find AELI, AudioEffectLibraryInfo, or legacy symbols in real driver: %s", dlerror());
+            dlclose(g_real_lib_handle);
+            g_real_lib_handle = nullptr;
+            return false;
+        }
     }
 
     return true;
@@ -269,10 +296,11 @@ static int32_t bridge_lib_get_descriptor(const effect_uuid_t *uuid, effect_descr
     return 0;
 }
 
-// Exported standard symbol for AudioFlinger - explicitly marked with default visibility!
+// Exported symbols for Android EffectsFactory (AELI, AudioEffectLibraryInfo, and legacy C functions)
 extern "C" {
+    // 1. Primary AOSP HAL symbol: AELI
     __attribute__((visibility("default")))
-    audio_effect_library_t AudioEffectLibraryInfo = {
+    audio_effect_library_t AELI = {
         AUDIO_EFFECT_LIBRARY_TAG,
         0x0100, // Version 1.0
         "ViPER4Android 32-bit Float SIMD Bridge",
@@ -281,4 +309,48 @@ extern "C" {
         bridge_lib_release_effect,
         bridge_lib_get_descriptor
     };
+
+    // 2. Extended symbol: AudioEffectLibraryInfo
+    __attribute__((visibility("default")))
+    audio_effect_library_t AudioEffectLibraryInfo = {
+        AUDIO_EFFECT_LIBRARY_TAG,
+        0x0100,
+        "ViPER4Android 32-bit Float SIMD Bridge",
+        "ViPER520 & devddd963",
+        bridge_lib_create_effect,
+        bridge_lib_release_effect,
+        bridge_lib_get_descriptor
+    };
+
+    // 3. Legacy C entry points queried by EffectsFactory when AELI lookup falls back
+    __attribute__((visibility("default")))
+    int32_t EffectCreate(const effect_uuid_t *uuid, int32_t sessionId, int32_t ioId, effect_handle_t *pHandle) {
+        return bridge_lib_create_effect(uuid, sessionId, ioId, pHandle);
+    }
+
+    __attribute__((visibility("default")))
+    int32_t EffectRelease(effect_handle_t handle) {
+        return bridge_lib_release_effect(handle);
+    }
+
+    __attribute__((visibility("default")))
+    int32_t EffectGetDescriptor(const effect_uuid_t *uuid, effect_descriptor_t *pDescriptor) {
+        return bridge_lib_get_descriptor(uuid, pDescriptor);
+    }
+
+    // 4. ViPER version query helpers
+    __attribute__((visibility("default")))
+    uint32_t GetLibraryVersionMain() { return 2; }
+
+    __attribute__((visibility("default")))
+    uint32_t GetLibraryVersionSub() { return 5; }
+
+    __attribute__((visibility("default")))
+    uint32_t GetLibraryVersionExt() { return 0; }
+
+    __attribute__((visibility("default")))
+    uint32_t GetLibraryVersionBuild() { return 4; }
+
+    __attribute__((visibility("default")))
+    const char* GetLibraryVersionCodename() { return "ViPER520 & devddd963"; }
 }
