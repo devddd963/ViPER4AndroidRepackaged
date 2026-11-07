@@ -19,8 +19,8 @@ static inline void float_to_s16_neon(const float* in, int16_t* out, size_t count
     for (; i + 3 < count; i += 4) {
         float32x4_t f = vld1q_f32(in + i);
         float32x4_t scaled = vmulq_f32(f, scale);
-        // Convert Float to Int32 with rounding
-        int32x4_t s32 = vcvtnq_s32_f32(scaled);
+        // Convert Float to Int32
+        int32x4_t s32 = vcvtq_s32_f32(scaled);
         // Saturate Int32 to Int16 (clamps > 0dBFS peaks without wrapping)
         int16x4_t s16 = vqmovn_s32(s32);
         vst1_s16(out + i, s16);
