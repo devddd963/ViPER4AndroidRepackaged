@@ -23,12 +23,14 @@ enum {
 // Paths to search for the original ViPER binary driver
 static const char* REAL_V4A_LIB_PATHS[] = {
     "libv4a_fx_real.so",
-    "/vendor/lib64/soundfx/libv4a_fx_real.so",
-    "/system/vendor/lib64/soundfx/libv4a_fx_real.so",
     "/vendor/lib/soundfx/libv4a_fx_real.so",
     "/system/vendor/lib/soundfx/libv4a_fx_real.so",
-    "/system/lib64/soundfx/libv4a_fx_real.so",
+    "/vendor/lib64/soundfx/libv4a_fx_real.so",
+    "/system/vendor/lib64/soundfx/libv4a_fx_real.so",
     "/system/lib/soundfx/libv4a_fx_real.so",
+    "/system/lib64/soundfx/libv4a_fx_real.so",
+    "/data/adb/modules/ViPER4AndroidFX/system/vendor/lib/soundfx/libv4a_fx_real.so",
+    "/data/adb/modules/ViPER4AndroidFX/vendor/lib/soundfx/libv4a_fx_real.so",
     nullptr
 };
 
