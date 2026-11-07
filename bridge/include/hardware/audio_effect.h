@@ -121,7 +121,7 @@ struct effect_interface_s {
     int32_t (*process_reverse)(effect_handle_t self, audio_buffer_t *inBuffer, audio_buffer_t *outBuffer);
 };
 
-#define AUDIO_EFFECT_LIBRARY_TAG ((('A') << 24) | (('O') << 16) | (('F') << 8) | ('X'))
+#define AUDIO_EFFECT_LIBRARY_TAG ((('A') << 24) | (('E') << 16) | (('L') << 8) | ('T'))
 
 typedef struct audio_effect_library_s {
     uint32_t tag;
